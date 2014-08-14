@@ -1,21 +1,29 @@
 #Region ;**** Directives created by AutoIt3Wrapper_GUI ****
-#AutoIt3Wrapper_UseX64=y
 #AutoIt3Wrapper_Change2CUI=y
 #AutoIt3Wrapper_Res_Comment=Extracts raw $MFT records
 #AutoIt3Wrapper_Res_Description=Extracts raw $MFT records
-#AutoIt3Wrapper_Res_Fileversion=1.0.0.0
+#AutoIt3Wrapper_Res_Fileversion=1.0.0.2
 #AutoIt3Wrapper_Res_requestedExecutionLevel=asInvoker
 #EndRegion ;**** Directives created by AutoIt3Wrapper_GUI ****
 #Include <WinAPIEx.au3>
 If $cmdline[0] = 0 Then
 	$File = FileOpenDialog("Select file",@ScriptDir,"All (*.*)")
 	If @error Then Exit
+	$MFT_Record_Size = InputBox("Set MFT record size","Record size can be 1024 or 4096",1024)
+	If @error then Exit
 ElseIf StringInStr($cmdline[1],"PhysicalDrive")=0 And FileExists($cmdline[1]) = 0 Then
 	ConsoleWrite("Input file does not exist: " & $cmdline[1] & @CRLF)
 	$File = FileOpenDialog("Select file",@ScriptDir,"All (*.*)")
 	If @error Then Exit
+	$MFT_Record_Size = InputBox("Set MFT record size","Record size can be 1024 or 4096",1024)
+	If @error then Exit
 Else
 	$File = $cmdline[1]
+	$MFT_Record_Size = $cmdline[2]
+EndIf
+If $MFT_Record_Size <> 1024 And $MFT_Record_Size <> 4096 Then
+	ConsoleWrite("Error MFT record size must be set correctly" & @CRLF)
+	Exit
 EndIf
 ConsoleWrite("File: " & $File & @CRLF)
 If $cmdline[0] = 2 Then
@@ -37,13 +45,14 @@ If $FileSize = 0 Then
 EndIf
 $hFile = _WinAPI_CreateFile("\\.\" & $File,2,2,7)
 If $hFile = 0 Then ConsoleWrite("CreateFile: " & _WinAPI_GetLastErrorMessage() & @CRLF)
-$rBuffer = DllStructCreate("byte [1024]")
+$rBuffer = DllStructCreate("byte ["&$MFT_Record_Size&"]")
 $hFileOut = _WinAPI_CreateFile("\\.\" & $OutFile,3,6,7)
 If $hFileOut = 0 Then ConsoleWrite("CreateFile: " & _WinAPI_GetLastErrorMessage() & @CRLF)
-$JumpSize = 512
-$SectorSize = 1024
+$JumpSize = $MFT_Record_Size
+$SectorSize = $MFT_Record_Size
 $NextOffset = 0
 $nBytes = ""
+$Timerstart = TimerInit()
 Do
 	If IsInt(Mod(($NextOffset * $JumpSize),$FileSize)/1000000) Then ConsoleWrite(Round((($NextOffset * $JumpSize)/$FileSize)*100,2) & " %" & @CRLF)
 	_WinAPI_SetFilePointerEx($hFile, $NextOffset*$JumpSize, $FILE_BEGIN)
@@ -58,6 +67,10 @@ Do
 	$NextOffset+=1
 ;Until $NextOffset = ($JumpSize+$FileSize-Mod($FileSize,$JumpSize))/$JumpSize
 Until $NextOffset * $JumpSize >= $FileSize
+;$timerdiff = TimerDiff($begin)
+;$timerdiff = Round(($timerdiff / 1000), 2)
+;ConsoleWrite("Job took " & $timerdiff & " seconds" & @CRLF)
+ConsoleWrite("Job took " & _WinAPI_StrFromTimeInterval(TimerDiff($Timerstart)))
 _WinAPI_CloseHandle($hFile)
 _WinAPI_CloseHandle($hFileOut)
 Exit

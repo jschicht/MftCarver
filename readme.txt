@@ -14,3 +14,7 @@ If no input is given, a fileopen dialog is launched. If output is not given, it 
 This tool is handy when you have no means of accessing a healthy $MFT. For instance a memory dump or damaged volume.
 
 Memory dumps contains a lot of $MFT records and can be easily extracted. When done, preferrably run mft2csv on the output file to decode the extracted $MFT records. For memory dumps configure mft2csv to use "Skip Fixups" and "Broken $MFT".
+
+
+Changelog:
+v1.0.0.2: Added support for configuring MFT record size to 4096 bytes.
