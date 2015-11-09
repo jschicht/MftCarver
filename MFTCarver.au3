@@ -1,9 +1,10 @@
 #Region ;**** Directives created by AutoIt3Wrapper_GUI ****
-#AutoIt3Wrapper_UseX64=y
+#AutoIt3Wrapper_Icon=..\..\..\Program Files (x86)\autoit-v3.3.14.2\Icons\au3.ico
+#AutoIt3Wrapper_UseUpx=y
 #AutoIt3Wrapper_Change2CUI=y
 #AutoIt3Wrapper_Res_Comment=Extracts raw $MFT records
 #AutoIt3Wrapper_Res_Description=Extracts raw $MFT records
-#AutoIt3Wrapper_Res_Fileversion=1.0.0.9
+#AutoIt3Wrapper_Res_Fileversion=1.0.0.11
 #AutoIt3Wrapper_Res_requestedExecutionLevel=asInvoker
 #EndRegion ;**** Directives created by AutoIt3Wrapper_GUI ****
 #Include <WinAPIEx.au3>
@@ -25,8 +26,9 @@ Global Const $EA = 'E0000000'
 Global Const $PROPERTY_SET = 'F0000000'
 Global Const $LOGGED_UTILITY_STREAM = '00010000'
 Global Const $ATTRIBUTE_END_MARKER = 'FFFFFFFF'
+Global Const $FILEsig = "46494c45"
 
-ConsoleWrite("MftCarver v1.0.0.9" & @CRLF)
+ConsoleWrite("MftCarver v1.0.0.11" & @CRLF)
 
 $TimestampStart = @YEAR & "-" & @MON & "-" & @MDAY & "_" & @HOUR & "-" & @MIN & "-" & @SEC
 $logfile = FileOpen(@ScriptDir & "\" & $TimestampStart & ".log",2+32)
@@ -72,7 +74,7 @@ If FileExists($OutFileWithoutFixups) Then
 	_DebugOut("Error outfile exist: " & $OutFileWithoutFixups)
 	Exit
 EndIf
-$OutFileFalsePositives = $File&"."&$TimestampStart&".false.positive"
+$OutFileFalsePositives = $File&"."&$TimestampStart&".false.positive.MFT"
 If FileExists($OutFileFalsePositives) Then
 	_DebugOut("Error outfile exist: " & $OutFileFalsePositives)
 	Exit
@@ -127,7 +129,7 @@ Do
 	_WinAPI_ReadFile($hFile, DllStructGetPtr($rBuffer), $SectorSize, $nBytes)
 	$DataChunk = DllStructGetData($rBuffer, 1)
 ;	ConsoleWrite("Record: " & $NextOffset & @CRLF)
-	If StringMid($DataChunk,3,8) <> "46494c45" Then
+	If StringMid($DataChunk,3,8) <> $FILEsig Then
 		$NextOffset+=1
 		ContinueLoop
 	EndIf
@@ -201,6 +203,7 @@ Func _HexEncode($bInput)
 EndFunc  ;==>_HexEncode
 
 Func _ValidateMftStructureWithFixups($MFTEntry)
+	Local $MaxLoops=100, $LocalCounter=0
 	$UpdSeqArrOffset = ""
 	$UpdSeqArrSize = ""
 	$UpdSeqArrOffset = StringMid($MFTEntry, 11, 4)
@@ -250,6 +253,7 @@ Func _ValidateMftStructureWithFixups($MFTEntry)
 	If $AttributeSize > ($MFT_Record_Size*2) Then Return 0
 	$AttributeKnown = 1
 	While $AttributeKnown = 1
+		$LocalCounter+=1
 		$NextAttributeType = StringMid($MFTEntry, $NextAttributeOffset, 8)
 		$AttributeType = $NextAttributeType
 ;		ConsoleWrite("$AttributeType: " & $AttributeType & @CRLF)
@@ -320,12 +324,14 @@ Func _ValidateMftStructureWithFixups($MFTEntry)
 		EndSelect
 
 		$NextAttributeOffset = $NextAttributeOffset + ($AttributeSize * 2)
+		If $LocalCounter > $MaxLoops Then Return 0 ;Safety break to prevent possible infinite loop with false positives.
 ;		If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
 	WEnd
 	Return 1
 EndFunc
 
 Func _ValidateMftStructure($MFTEntry)
+	Local $MaxLoops=100, $LocalCounter=0
 	$NextAttributeOffset = (Dec(StringMid($MFTEntry, 43, 2)) * 2) + 3
 	If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
 	$AttributeType = StringMid($MFTEntry, $NextAttributeOffset, 8)
@@ -334,6 +340,7 @@ Func _ValidateMftStructure($MFTEntry)
 	If $AttributeSize > ($MFT_Record_Size*2) Then Return 0
 	$AttributeKnown = 1
 	While $AttributeKnown = 1
+		$LocalCounter+=1
 		$NextAttributeType = StringMid($MFTEntry, $NextAttributeOffset, 8)
 		$AttributeType = $NextAttributeType
 ;		ConsoleWrite("$AttributeType: " & $AttributeType & @CRLF)
@@ -403,6 +410,7 @@ Func _ValidateMftStructure($MFTEntry)
 		EndSelect
 
 		$NextAttributeOffset = $NextAttributeOffset + ($AttributeSize * 2)
+		If $LocalCounter > $MaxLoops Then Return 0 ;Safety break to prevent possible infinite loop with false positives.
 ;		If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
 	WEnd
 	Return 1
