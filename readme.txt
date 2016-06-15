@@ -3,20 +3,20 @@ MFTCarver
 This is a simple tool to dump individual $MFT records. It scans the input for the signature on each sector/512 bytes. Input must be a file.
 
 Syntax is:
-MftCarver.exe InputFile MftRecordSize
+MftCarver.exe /InputFile: /OutputPath: /RecordSize:
 
-Example 1
-MftCarver.exe c:\memdump.bin 1024
+Examples
+MftCarver.exe /InputFile:c:\slack.bin
+MftCarver.exe /InputFile:c:\memdump.bin /RecordSize:1024
+MftCarver.exe /InputFile:c:\unallocated.chunk /OutputPath:e:\temp /RecordSize:4096
 
-Example 2
-MftCarver.exe c:\unallocated.chunk 4096
+If no input file is given as parameter, a fileopen dialog is launched. Output will default to program directory if omitted. Output is split in 3, in addition to a log file. Example output may look like:
+Carver_MFT_2015-02-14_21-46-54.log
+Carver_MFT_2015-02-14_21-46-54.wfixups.MFT
+Carver_MFT_2015-02-14_21-46-54.wofixups.MFT
+Carver_MFT_2015-02-14_21-46-54.false.positives.MFT
 
-If no input file is given as parameter, a fileopen dialog is launched. Output is automatically resolved based on the input name. Output is split in 3. For example 1 the output may be:
-memdump.bin.2015-02-14_21-46-54.wfixups.MFT
-memdump.bin.2015-02-14_21-46-54.wofixups.MFT
-memdump.bin.2015-02-14_21-46-54.false.positives.MFT
-
-If not mft record size is supplied as parameter, an input box will be displayed, asking to fill in wanted MFT record size (1024 or 4096).
+If not mft record size is supplied as parameter, it will default to 1024 which is the most common one.
 
 This tool is handy when you have no means of accessing a healthy $MFT. For instance a memory dump or damaged volume. The tool will by default first attempt to apply fixups, and if it fails it will retry by skipping fixups. Applying fixups here means verifying the update sequence array and applying it.
 
@@ -28,8 +28,8 @@ It is advised to check the log file generated. There will be verbose information
 
 The test of the record structure is rather comprehensive, and the output quality is excellently divided in 3.
 
-
 Changelog:
+v1.0.0.12: Added OutputPath as parameter. Commandline syntax changes. Changed the output file names to be prefixed with Carver_MFT_
 v1.0.0.11: Appended .MFT on the false positive output.
 v1.0.0.10: Added limit on loop when evaluating record structure, due to possible infinite loops with damaged record structure.
 v1.0.0.9: Added functionality for dumping flagged false positives into a separate file.
