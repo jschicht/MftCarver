@@ -4,7 +4,7 @@
 #AutoIt3Wrapper_Change2CUI=y
 #AutoIt3Wrapper_Res_Comment=Extracts raw $MFT records
 #AutoIt3Wrapper_Res_Description=Extracts raw $MFT records
-#AutoIt3Wrapper_Res_Fileversion=1.0.0.13
+#AutoIt3Wrapper_Res_Fileversion=1.0.0.14
 #AutoIt3Wrapper_Res_requestedExecutionLevel=asInvoker
 #EndRegion ;**** Directives created by AutoIt3Wrapper_GUI ****
 #Include <WinAPIEx.au3>
@@ -29,8 +29,9 @@ Global Const $ATTRIBUTE_END_MARKER = 'FFFFFFFF'
 Global Const $FILEsig = "46494c45"
 
 Global $File,$OutputPath,$MFT_Record_Size,$ScanAllBytes=0,$SmallBuffSize=8
+Global $VerifyFragment=0, $OutFragmentName="OutFragment.bin", $RebuiltFragment, $CleanUp=0
 
-ConsoleWrite("MftCarver v1.0.0.13" & @CRLF)
+ConsoleWrite("MftCarver v1.0.0.14" & @CRLF)
 
 _GetInputParams()
 
@@ -145,11 +146,31 @@ Do
 			If $Written = 0 Then _DebugOut("WriteFile error on " & $OutFileFalsePositives & " : " & _WinAPI_GetLastErrorMessage() & @CRLF)
 			ContinueLoop
 		Else ; MFT structure could be validated, although fixups failed. This record may be from memory dump.
+			If $VerifyFragment Then
+				$RebuiltFragment = $DataChunk
+				_WriteOutputFragment()
+				If @error Then
+					_DebugOut("Output fragment was verified but could not be written to: " & $OutputPath & "\" & $OutFragmentName & @CRLF)
+					Exit(4)
+				Else
+					_DebugOut("Output fragment verified and written to: " & $OutputPath & "\" & $OutFragmentName & @CRLF)
+				EndIf
+			EndIf
 			$Written = _WinAPI_WriteFile($hFileOutWithoutFixups, DllStructGetPtr($rBuffer), $SectorSize, $nBytes)
 			If $Written = 0 Then _DebugOut("WriteFile error on " & $OutFileWithoutFixups & " : " & _WinAPI_GetLastErrorMessage() & @CRLF)
 			$RecordsWithoutFixupsCounter+=1
 		EndIf
 	Else ; Fixups successfully verified and MFT structure seems fine.
+		If $VerifyFragment Then
+			$RebuiltFragment = _ApplyFixups($DataChunk)
+			_WriteOutputFragment()
+			If @error Then
+				_DebugOut("Output fragment was verified but could not be written to: " & $OutputPath & "\" & $OutFragmentName & @CRLF)
+				Exit(4)
+			Else
+				_DebugOut("Output fragment verified and written to: " & $OutputPath & "\" & $OutFragmentName & @CRLF)
+			EndIf
+		EndIf
 		$Written = _WinAPI_WriteFile($hFileOutWithFixups, DllStructGetPtr($rBuffer), $SectorSize, $nBytes)
 		If $Written = 0 Then _DebugOut("WriteFile error on " & $OutFileWithFixups & " : " & _WinAPI_GetLastErrorMessage() & @CRLF)
 		$RecordsWithFixupsCounter+=1
@@ -168,9 +189,21 @@ _WinAPI_CloseHandle($hFileOutWithFixups)
 _WinAPI_CloseHandle($hFileOutWithoutFixups)
 _WinAPI_CloseHandle($hFileOutFalsePositives)
 FileClose($logfile)
+
 If FileGetSize($OutFileWithFixups) = 0 Then FileDelete($OutFileWithFixups)
 If FileGetSize($OutFileWithoutFixups) = 0 Then FileDelete($OutFileWithoutFixups)
 If FileGetSize($OutFileFalsePositives) = 0 Then FileDelete($OutFileFalsePositives)
+
+If $CleanUp Then
+	FileDelete($OutFileWithFixups)
+	FileDelete($OutFileWithoutFixups)
+	FileDelete($OutFileFalsePositives)
+	FileDelete($logfilename)
+EndIf
+
+If ($RecordsWithFixupsCounter + $RecordsWithoutFixupsCounter) < 1 Then
+	Exit(1)
+EndIf
 Exit
 
 Func _SwapEndian($iHex)
@@ -433,6 +466,9 @@ Func _GetInputParams()
 		If StringLeft($cmdline[$i],12) = "/OutputPath:" Then $OutputPath = StringMid($cmdline[$i],13)
 		If StringLeft($cmdline[$i],12) = "/RecordSize:" Then $MFT_Record_Size = StringMid($cmdline[$i],13)
 		If StringLeft($cmdline[$i],14) = "/ScanAllBytes:" Then $ScanAllBytes = StringMid($cmdline[$i],15)
+		If StringLeft($cmdline[$i],16) = "/VerifyFragment:" Then $VerifyFragment = StringMid($cmdline[$i],17)
+		If StringLeft($cmdline[$i],17) = "/OutFragmentName:" Then $OutFragmentName = StringMid($cmdline[$i],18)
+		If StringLeft($cmdline[$i],9) = "/CleanUp:" Then $CleanUp = StringMid($cmdline[$i],10)
 	Next
 
 	If $File="" Then ;No InputFile parameter passed
@@ -472,4 +508,98 @@ Func _GetInputParams()
 		$ScanAllBytes=0
 	EndIf
 
+	If StringLen($VerifyFragment) > 0 Then
+		If $VerifyFragment <> 1 Then
+			$VerifyFragment = 0
+		EndIf
+	EndIf
+
+	If StringLen($OutFragmentName) > 0 Then
+		If StringInStr($OutFragmentName,"\") Then
+			ConsoleWrite("Error: OutFragmentName must be a filename and not a path." & @CRLF)
+			Exit
+		EndIf
+	EndIf
+
+	If StringLen($CleanUp) > 0 Then
+		If $CleanUp <> 1 Then
+			$CleanUp = 0
+		EndIf
+	EndIf
+
+EndFunc
+
+Func _ApplyFixups($MFTEntry)
+	$UpdSeqArrOffset = ""
+	$UpdSeqArrSize = ""
+	$UpdSeqArrOffset = StringMid($MFTEntry, 11, 4)
+	$UpdSeqArrOffset = Dec(_SwapEndian($UpdSeqArrOffset),2)
+	$UpdSeqArrSize = StringMid($MFTEntry, 15, 4)
+	$UpdSeqArrSize = Dec(_SwapEndian($UpdSeqArrSize),2)
+	$UpdSeqArr = StringMid($MFTEntry, 3 + ($UpdSeqArrOffset * 2), $UpdSeqArrSize * 2 * 2)
+	If $MFT_Record_Size = 1024 Then
+		Local $UpdSeqArrPart0 = StringMid($UpdSeqArr,1,4)
+		Local $UpdSeqArrPart1 = StringMid($UpdSeqArr,5,4)
+		Local $UpdSeqArrPart2 = StringMid($UpdSeqArr,9,4)
+		Local $RecordEnd1 = StringMid($MFTEntry,1023,4)
+		Local $RecordEnd2 = StringMid($MFTEntry,2047,4)
+		If $RecordEnd1 <> $RecordEnd2 Or $UpdSeqArrPart0 <> $RecordEnd1 Then
+			Return 0
+		EndIf
+		$MFTEntry = StringMid($MFTEntry,1,1022) & $UpdSeqArrPart1 & StringMid($MFTEntry,1027,1020) & $UpdSeqArrPart2
+	ElseIf $MFT_Record_Size = 4096 Then
+		Local $UpdSeqArrPart0 = StringMid($UpdSeqArr,1,4)
+		Local $UpdSeqArrPart1 = StringMid($UpdSeqArr,5,4)
+		Local $UpdSeqArrPart2 = StringMid($UpdSeqArr,9,4)
+		Local $UpdSeqArrPart3 = StringMid($UpdSeqArr,13,4)
+		Local $UpdSeqArrPart4 = StringMid($UpdSeqArr,17,4)
+		Local $UpdSeqArrPart5 = StringMid($UpdSeqArr,21,4)
+		Local $UpdSeqArrPart6 = StringMid($UpdSeqArr,25,4)
+		Local $UpdSeqArrPart7 = StringMid($UpdSeqArr,29,4)
+		Local $UpdSeqArrPart8 = StringMid($UpdSeqArr,33,4)
+		Local $RecordEnd1 = StringMid($MFTEntry,1023,4)
+		Local $RecordEnd2 = StringMid($MFTEntry,2047,4)
+		Local $RecordEnd3 = StringMid($MFTEntry,3071,4)
+		Local $RecordEnd4 = StringMid($MFTEntry,4095,4)
+		Local $RecordEnd5 = StringMid($MFTEntry,5119,4)
+		Local $RecordEnd6 = StringMid($MFTEntry,6143,4)
+		Local $RecordEnd7 = StringMid($MFTEntry,7167,4)
+		Local $RecordEnd8 = StringMid($MFTEntry,8191,4)
+		If $UpdSeqArrPart0 <> $RecordEnd1 OR $UpdSeqArrPart0 <> $RecordEnd2 OR $UpdSeqArrPart0 <> $RecordEnd3 OR $UpdSeqArrPart0 <> $RecordEnd4 OR $UpdSeqArrPart0 <> $RecordEnd5 OR $UpdSeqArrPart0 <> $RecordEnd6 OR $UpdSeqArrPart0 <> $RecordEnd7 OR $UpdSeqArrPart0 <> $RecordEnd8 Then
+			Return 0
+		EndIf
+		$MFTEntry =  StringMid($MFTEntry,1,1022) & $UpdSeqArrPart1 & StringMid($MFTEntry,1027,1020) & $UpdSeqArrPart2 & StringMid($MFTEntry,2051,1020) & $UpdSeqArrPart3 & StringMid($MFTEntry,3075,1020) & $UpdSeqArrPart4 & StringMid($MFTEntry,4099,1020) & $UpdSeqArrPart5 & StringMid($MFTEntry,5123,1020) & $UpdSeqArrPart6 & StringMid($MFTEntry,6147,1020) & $UpdSeqArrPart7 & StringMid($MFTEntry,7171,1020) & $UpdSeqArrPart8
+	EndIf
+	Return $MFTEntry
+EndFunc
+
+Func _WriteOutputFragment()
+	Local $nBytes, $Offset
+
+	$Size = BinaryLen($RebuiltFragment)
+	$Size2 = $Size
+	If Mod($Size,0x8) Then
+		ConsoleWrite("SizeOf $RebuiltFragment: " & $Size & @CRLF)
+		While 1
+			$RebuiltFragment &= "00"
+			$Size2 += 1
+			If Mod($Size2,0x8) = 0 Then ExitLoop
+		WEnd
+		ConsoleWrite("Corrected SizeOf $RebuiltFragment: " & $Size2 & @CRLF)
+	EndIf
+
+	Local $tBuffer = DllStructCreate("byte[" & $Size2 & "]")
+	DllStructSetData($tBuffer,1,$RebuiltFragment)
+	If @error Then Return SetError(1)
+	Local $OutFile = $OutputPath & "\" & $OutFragmentName
+	If Not FileExists($OutFile) Then
+		$Offset = 0
+	Else
+		$Offset = FileGetSize($OutFile)
+	EndIf
+	Local $hFileOut = _WinAPI_CreateFile("\\.\" & $OutFile,3,6,7)
+	If Not $hFileOut Then Return SetError(1)
+	_WinAPI_SetFilePointerEx($hFileOut, $Offset, $FILE_BEGIN)
+	If Not _WinAPI_WriteFile($hFileOut, DllStructGetPtr($tBuffer), DllStructGetSize($tBuffer), $nBytes) Then Return SetError(1)
+	_WinAPI_CloseHandle($hFileOut)
 EndFunc
