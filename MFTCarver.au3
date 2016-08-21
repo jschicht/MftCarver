@@ -4,7 +4,7 @@
 #AutoIt3Wrapper_Change2CUI=y
 #AutoIt3Wrapper_Res_Comment=Extracts raw $MFT records
 #AutoIt3Wrapper_Res_Description=Extracts raw $MFT records
-#AutoIt3Wrapper_Res_Fileversion=1.0.0.14
+#AutoIt3Wrapper_Res_Fileversion=1.0.0.15
 #AutoIt3Wrapper_Res_requestedExecutionLevel=asInvoker
 #EndRegion ;**** Directives created by AutoIt3Wrapper_GUI ****
 #Include <WinAPIEx.au3>
@@ -27,11 +27,13 @@ Global Const $PROPERTY_SET = 'F0000000'
 Global Const $LOGGED_UTILITY_STREAM = '00010000'
 Global Const $ATTRIBUTE_END_MARKER = 'FFFFFFFF'
 Global Const $FILEsig = "46494c45"
+Global Const $INDXsig = "494E4458"
+Global Const $RCRDsig = "52435244"
 
-Global $File,$OutputPath,$MFT_Record_Size,$ScanAllBytes=0,$SmallBuffSize=8
+Global $File,$OutputPath,$MFT_Record_Size
 Global $VerifyFragment=0, $OutFragmentName="OutFragment.bin", $RebuiltFragment, $CleanUp=0
 
-ConsoleWrite("MftCarver v1.0.0.14" & @CRLF)
+ConsoleWrite("MftCarver v1.0.0.15" & @CRLF)
 
 _GetInputParams()
 
@@ -66,7 +68,6 @@ _DebugOut("OutFileWithoutFixups: " & $OutFileWithoutFixups)
 _DebugOut("OutFileFalsePositives: " & $OutFileFalsePositives)
 
 _DebugOut("MFT record size configuration: " & $MFT_Record_Size)
-_DebugOut("ScanAllBytes: " & $ScanAllBytes)
 
 $FileSize = FileGetSize($File)
 If $FileSize = 0 Then
@@ -96,14 +97,9 @@ If $hFileOutFalsePositives = 0 Then
 EndIf
 
 $rBuffer = DllStructCreate("byte ["&$MFT_Record_Size&"]")
-$rBufferSmall = DllStructCreate("byte ["&$SmallBuffSize&"]")
-If $ScanAllBytes Then
-	$JumpSize = 1
-Else
-	$JumpSize = 512
-EndIf
-$SectorSize = $MFT_Record_Size
-$JumpForward = $MFT_Record_Size/$JumpSize
+$BigBuffSize = 512 * 1000
+$rBufferBig = DllStructCreate("byte ["&$BigBuffSize&"]")
+
 $NextOffset = 0
 $FalsePositivesCounter = 0
 $RecordsWithFixupsCounter = 0
@@ -111,38 +107,63 @@ $RecordsWithoutFixupsCounter = 0
 $nBytes = ""
 $Timerstart = TimerInit()
 Do
-	If IsInt(Mod(($NextOffset * $JumpSize),$FileSize)/1000000) Then ConsoleWrite(Round((($NextOffset * $JumpSize)/$FileSize)*100,2) & " %" & @CRLF)
-	If Not _WinAPI_SetFilePointerEx($hFile, $NextOffset*$JumpSize, $FILE_BEGIN) Then
-		_DebugOut("SetFilePointerEx error on offset " & $NextOffset*$JumpSize & @CRLF)
+	If IsInt(Mod(($NextOffset),$FileSize)/1000000) Then ConsoleWrite(Round((($NextOffset)/$FileSize)*100,2) & " %" & @CRLF)
+	If Not _WinAPI_SetFilePointerEx($hFile, $NextOffset, $FILE_BEGIN) Then
+		_DebugOut("SetFilePointerEx error on offset " & $NextOffset & @CRLF)
 		Exit
-	EndIf
-	If Not _WinAPI_ReadFile($hFile, DllStructGetPtr($rBufferSmall), $SmallBuffSize, $nBytes) Then
-		_DebugOut("ReadFile error on offset " & $NextOffset*$JumpSize & @CRLF)
-		Exit
-	EndIf
-	$DataChunkSmall = DllStructGetData($rBufferSmall, 1)
-;	ConsoleWrite("Record: " & $NextOffset & @CRLF)
-	If StringMid($DataChunkSmall,3,8) <> $FILEsig Then
-		$NextOffset+=1
-		ContinueLoop
 	EndIf
 
-	If Not _WinAPI_SetFilePointerEx($hFile, $NextOffset*$JumpSize, $FILE_BEGIN) Then
-		_DebugOut("SetFilePointerEx error on offset " & $NextOffset*$JumpSize & @CRLF)
+	If Not _WinAPI_ReadFile($hFile, DllStructGetPtr($rBufferBig), $BigBuffSize, $nBytes) Then
+		_DebugOut("ReadFile error on offset " & $NextOffset & @CRLF)
 		Exit
 	EndIf
-	If Not _WinAPI_ReadFile($hFile, DllStructGetPtr($rBuffer), $SectorSize, $nBytes) Then
-		_DebugOut("ReadFile error on offset " & $NextOffset*$JumpSize & @CRLF)
+	$DataChunkBig = DllStructGetData($rBufferBig, 1)
+
+	$OffsetTest = StringInStr($DataChunkBig,$FILEsig)
+
+
+	If Not $OffsetTest Then
+		$NextOffset += $BigBuffSize
+		ContinueLoop
+	EndIf
+	If $NextOffset > 0 Then
+		If Mod($OffsetTest,2)=0 Then
+			;We can only consider bytes, not nibbles
+			$NextOffset += $NextOffset/2
+			ContinueLoop
+		EndIf
+		If $OffsetTest >= ($NextOffset*2) - ($MFT_Record_Size*2) Then
+			$NextOffset += (($OffsetTest-3)/2)
+			ContinueLoop
+		EndIf
+	EndIf
+
+	$FILEOffset = (($OffsetTest-3)/2)
+	If Not _WinAPI_SetFilePointerEx($hFile, $FILEOffset+$NextOffset, $FILE_BEGIN) Then
+		_DebugOut("SetFilePointerEx error on offset " & $FILEOffset+$NextOffset & @CRLF)
+		Exit
+	EndIf
+	If Not _WinAPI_ReadFile($hFile, DllStructGetPtr($rBuffer), $MFT_Record_Size, $nBytes) Then
+		_DebugOut("ReadFile error on offset " & $FILEOffset+$NextOffset & @CRLF)
 		Exit
 	EndIf
 	$DataChunk = DllStructGetData($rBuffer, 1)
 
+	If StringMid($DataChunk,3,8) <> $FILEsig Then
+		_DebugOut("Error: This should not happen" & @CRLF)
+		_DebugOut("Look up 0x" & Hex(Int($FILEOffset+$NextOffset)) & @CRLF)
+		_DebugOut(_HexEncode($DataChunk) & @CRLF)
+		$NextOffset += 1
+		ContinueLoop
+	EndIf
+
 	If Not _ValidateMftStructureWithFixups($DataChunk) Then ; Test failed. Trying to validate MFT structure without caring for fixups
 		If Not _ValidateMftStructure($DataChunk) Then ; MFT structure seems bad. False positive
-			_DebugOut("False positive at 0x" & Hex(Int($NextOffset*$JumpSize)))
+			$ErrorCode = @error
+			_DebugOut("False positive at 0x" & Hex(Int($FILEOffset+$NextOffset)) & " ErrorCode: " & $ErrorCode)
 			$FalsePositivesCounter+=1
-			$NextOffset+=1
-			$Written = _WinAPI_WriteFile($hFileOutFalsePositives, DllStructGetPtr($rBuffer), $SectorSize, $nBytes)
+			$NextOffset += $FILEOffset + 1
+			$Written = _WinAPI_WriteFile($hFileOutFalsePositives, DllStructGetPtr($rBuffer), $MFT_Record_Size, $nBytes)
 			If $Written = 0 Then _DebugOut("WriteFile error on " & $OutFileFalsePositives & " : " & _WinAPI_GetLastErrorMessage() & @CRLF)
 			ContinueLoop
 		Else ; MFT structure could be validated, although fixups failed. This record may be from memory dump.
@@ -156,7 +177,7 @@ Do
 					_DebugOut("Output fragment verified and written to: " & $OutputPath & "\" & $OutFragmentName & @CRLF)
 				EndIf
 			EndIf
-			$Written = _WinAPI_WriteFile($hFileOutWithoutFixups, DllStructGetPtr($rBuffer), $SectorSize, $nBytes)
+			$Written = _WinAPI_WriteFile($hFileOutWithoutFixups, DllStructGetPtr($rBuffer), $MFT_Record_Size, $nBytes)
 			If $Written = 0 Then _DebugOut("WriteFile error on " & $OutFileWithoutFixups & " : " & _WinAPI_GetLastErrorMessage() & @CRLF)
 			$RecordsWithoutFixupsCounter+=1
 		EndIf
@@ -171,13 +192,13 @@ Do
 				_DebugOut("Output fragment verified and written to: " & $OutputPath & "\" & $OutFragmentName & @CRLF)
 			EndIf
 		EndIf
-		$Written = _WinAPI_WriteFile($hFileOutWithFixups, DllStructGetPtr($rBuffer), $SectorSize, $nBytes)
+		$Written = _WinAPI_WriteFile($hFileOutWithFixups, DllStructGetPtr($rBuffer), $MFT_Record_Size, $nBytes)
 		If $Written = 0 Then _DebugOut("WriteFile error on " & $OutFileWithFixups & " : " & _WinAPI_GetLastErrorMessage() & @CRLF)
 		$RecordsWithFixupsCounter+=1
 	EndIf
 
-	$NextOffset+=$JumpForward
-Until $NextOffset * $JumpSize >= $FileSize
+	$NextOffset += $FILEOffset + $MFT_Record_Size
+Until $NextOffset >= $FileSize
 
 _DebugOut("Job took " & _WinAPI_StrFromTimeInterval(TimerDiff($Timerstart)))
 _DebugOut("Found records with fixups applied: " & $RecordsWithFixupsCounter)
@@ -281,11 +302,11 @@ Func _ValidateMftStructureWithFixups($MFTEntry)
 	EndIf
 
 	$NextAttributeOffset = (Dec(StringMid($MFTEntry, 43, 2)) * 2) + 3
-	If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
+	If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return SetError(1,0,0)
 	$AttributeType = StringMid($MFTEntry, $NextAttributeOffset, 8)
 	$AttributeSize = StringMid($MFTEntry, $NextAttributeOffset + 8, 8)
 	$AttributeSize = Dec(_SwapEndian($AttributeSize),2)
-	If $AttributeSize > ($MFT_Record_Size*2) Then Return 0
+	If $AttributeSize > ($MFT_Record_Size*2) Then Return SetError(2,0,0)
 	$AttributeKnown = 1
 	While $AttributeKnown = 1
 		$LocalCounter+=1
@@ -296,7 +317,7 @@ Func _ValidateMftStructureWithFixups($MFTEntry)
 		$AttributeSize = Dec(_SwapEndian($AttributeSize),2)
 		If Not $AttributeType = $ATTRIBUTE_END_MARKER Then
 			If $AttributeSize > ($MFT_Record_Size*2) Then
-				Return 0
+				Return SetError(3,0,0)
 			EndIf
 		EndIf
 		Select
@@ -354,12 +375,12 @@ Func _ValidateMftStructureWithFixups($MFTEntry)
 			Case Else
 ;			Case $AttributeType <> $LOGGED_UTILITY_STREAM And $AttributeType <> $EA And $AttributeType <> $EA_INFORMATION And $AttributeType <> $REPARSE_POINT And $AttributeType <> $BITMAP And $AttributeType <> $INDEX_ALLOCATION And $AttributeType <> $INDEX_ROOT And $AttributeType <> $DATA And $AttributeType <> $VOLUME_INFORMATION And $AttributeType <> $VOLUME_NAME And $AttributeType <> $SECURITY_DESCRIPTOR And $AttributeType <> $OBJECT_ID And $AttributeType <> $FILE_NAME And $AttributeType <> $ATTRIBUTE_LIST And $AttributeType <> $STANDARD_INFORMATION And $AttributeType <> $PROPERTY_SET And $AttributeType <> $ATTRIBUTE_END_MARKER
 				$AttributeKnown = 0
-				Return 0
+				Return SetError(4,0,0)
 
 		EndSelect
 
 		$NextAttributeOffset = $NextAttributeOffset + ($AttributeSize * 2)
-		If $LocalCounter > $MaxLoops Then Return 0 ;Safety break to prevent possible infinite loop with false positives.
+		If $LocalCounter > $MaxLoops Then Return SetError(5,0,0) ;Safety break to prevent possible infinite loop with false positives.
 ;		If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
 	WEnd
 	Return 1
@@ -368,11 +389,11 @@ EndFunc
 Func _ValidateMftStructure($MFTEntry)
 	Local $MaxLoops=100, $LocalCounter=0
 	$NextAttributeOffset = (Dec(StringMid($MFTEntry, 43, 2)) * 2) + 3
-	If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
+	If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return SetError(1,0,0)
 	$AttributeType = StringMid($MFTEntry, $NextAttributeOffset, 8)
 	$AttributeSize = StringMid($MFTEntry, $NextAttributeOffset + 8, 8)
 	$AttributeSize = Dec(_SwapEndian($AttributeSize),2)
-	If $AttributeSize > ($MFT_Record_Size*2) Then Return 0
+	If $AttributeSize > ($MFT_Record_Size*2) Then Return SetError(2,0,0)
 	$AttributeKnown = 1
 	While $AttributeKnown = 1
 		$LocalCounter+=1
@@ -383,7 +404,7 @@ Func _ValidateMftStructure($MFTEntry)
 		$AttributeSize = Dec(_SwapEndian($AttributeSize),2)
 		If Not $AttributeType = $ATTRIBUTE_END_MARKER Then
 			If $AttributeSize > ($MFT_Record_Size*2) Then
-				Return 0
+				Return SetError(3,0,0)
 			EndIf
 		EndIf
 		Select
@@ -440,12 +461,12 @@ Func _ValidateMftStructure($MFTEntry)
 
 			Case Else
 				$AttributeKnown = 0
-				Return 0
+				Return SetError(4,0,0)
 
 		EndSelect
 
 		$NextAttributeOffset = $NextAttributeOffset + ($AttributeSize * 2)
-		If $LocalCounter > $MaxLoops Then Return 0 ;Safety break to prevent possible infinite loop with false positives.
+		If $LocalCounter > $MaxLoops Then Return SetError(5,0,0) ;Safety break to prevent possible infinite loop with false positives.
 ;		If $NextAttributeOffset > ($MFT_Record_Size*2) Then Return 0
 	WEnd
 	Return 1
@@ -465,7 +486,6 @@ Func _GetInputParams()
 		If StringLeft($cmdline[$i],11) = "/InputFile:" Then $File = StringMid($cmdline[$i],12)
 		If StringLeft($cmdline[$i],12) = "/OutputPath:" Then $OutputPath = StringMid($cmdline[$i],13)
 		If StringLeft($cmdline[$i],12) = "/RecordSize:" Then $MFT_Record_Size = StringMid($cmdline[$i],13)
-		If StringLeft($cmdline[$i],14) = "/ScanAllBytes:" Then $ScanAllBytes = StringMid($cmdline[$i],15)
 		If StringLeft($cmdline[$i],16) = "/VerifyFragment:" Then $VerifyFragment = StringMid($cmdline[$i],17)
 		If StringLeft($cmdline[$i],17) = "/OutFragmentName:" Then $OutFragmentName = StringMid($cmdline[$i],18)
 		If StringLeft($cmdline[$i],9) = "/CleanUp:" Then $CleanUp = StringMid($cmdline[$i],10)
@@ -497,15 +517,6 @@ Func _GetInputParams()
 	Else
 		ConsoleWrite("$MFT record size was omitted. Reverting to default 1024." & @CRLF)
 		$MFT_Record_Size=1024
-	EndIf
-
-	If StringLen($ScanAllBytes) > 0 Then
-		If $ScanAllBytes<>0 And $ScanAllBytes<>1 Then
-			ConsoleWrite("Error: /ScanAllBytes: param was not configured properly. Expected 0 or 1. Reverting to default 0." & @CRLF)
-			$ScanAllBytes=0
-		EndIf
-	Else
-		$ScanAllBytes=0
 	EndIf
 
 	If StringLen($VerifyFragment) > 0 Then

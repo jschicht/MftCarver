@@ -1,0 +1,49 @@
+MftCarver Changelog
+
+1.0.0.15
+Great performance improvement.
+Logging of ErrorCodes for false positives.
+Removed /ScanAllBytes parameter as it is default, and makes no sense not to.
+
+1.0.0.14
+Added 3 new parameters. /VerifyFragment:, /OutFragmentName: and /CleanUp:. 
+Added exit errorlevel to make it suite better with batch scripting.
+
+1.0.0.13
+Added /ScanAllBytes as new parameter. Default is 0. If set, then scanning will be performed on every byte, instead of per sector (only works on images and files).
+
+1.0.0.12
+Added OutputPath as parameter. 
+Commandline syntax changes. 
+Changed the output file names to be prefixed with Carver_MFT_
+
+1.0.0.11
+Appended .MFT on the false positive output.
+
+1.0.0.10
+Added limit on loop when evaluating record structure, due to possible infinite loops with damaged record structure.
+
+1.0.0.9
+Added functionality for dumping flagged false positives into a separate file.
+
+1.0.0.8
+Added support for splitting output in 2 for found records with and without fixups applied. 
+Added logging.
+
+1.0.0.7
+Fixed bug in sanity check. 
+
+1.0.0.6
+Reverted to default scanning of every sector.
+
+1.0.0.5
+Fixed bug in sanity check.
+
+1.0.0.4
+Fixed performance bug.
+
+1.0.0.3
+Added sanity check of the MFT record structure, to filter out false positives.
+
+1.0.0.2
+Added support for configuring MFT record size to 4096 bytes.
